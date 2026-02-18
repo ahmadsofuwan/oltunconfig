@@ -1,5 +1,4 @@
 const snmp = require("net-snmp");
-require("dotenv").config();
 
 const OIDS = [
   "1.3.6.1.4.1.3902.1012.3.13.3", // GPON Uncfg Table

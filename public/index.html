@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GPON Unconfigured Modem Checker</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+    />
+  </head>
+  <body>
+    <div class="background-blobs">
+      <div class="blob blob-1"></div>
+      <div class="blob blob-2"></div>
+      <div class="blob blob-3"></div>
+    </div>
+
+    <div class="container">
+      <header>
+        <div class="logo">
+          <i class="fas fa-network-wired"></i>
+          <h1>ONU Checker</h1>
+        </div>
+        <div class="status-badge" id="app-status">
+          <span class="dot"></span>
+          <span class="status-text">Ready</span>
+        </div>
+      </header>
+
+      <main>
+        <section class="controls glass">
+          <div class="info-group">
+            <h2>Unconfigured Modems</h2>
+            <p>Mendeteksi modem ZTE yang belum dikonfigurasi pada OLT.</p>
+          </div>
+          <button id="refresh-btn" class="btn-primary">
+            <i class="fas fa-sync-alt"></i> Scan Sekarang
+          </button>
+        </section>
+
+        <section class="results">
+          <div id="loading" class="hidden">
+            <div class="loader"></div>
+            <p>Scanning OLT... Mohon tunggu.</p>
+          </div>
+
+          <div id="error-container" class="hidden glass error-card">
+            <i class="fas fa-exclamation-triangle"></i>
+            <p id="error-msg"></p>
+          </div>
+
+          <div class="table-container glass">
+            <table id="onu-table">
+              <thead>
+                <tr>
+                  <th>No</th>
+                  <th>Serial Number</th>
+                  <th>ONU ID / Port</th>
+                  <th>Raw Data</th>
+                  <th>Aksi</th>
+                </tr>
+              </thead>
+              <tbody id="onu-list">
+                <!-- Data akan dimunculkan di sini -->
+                <tr>
+                  <td colspan="5" class="empty-msg">
+                    Klik "Scan Sekarang" untuk memulai pencarian.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <p>&copy; 2024 GPON Manager Tool • Built with Node.js</p>
+      </footer>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

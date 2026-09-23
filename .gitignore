@@ -8,3 +8,6 @@ yarn-error.log*
 .vscode/
 dist/
 build/
+data/
+*.db
+*.sqlite

@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap"
       rel="stylesheet"
     />
     <link
@@ -36,54 +36,386 @@
       </header>
 
       <main>
-        <section class="controls glass">
-          <div class="info-group">
-            <h2>Unconfigured Modems</h2>
-            <p>Mendeteksi modem ZTE yang belum dikonfigurasi pada OLT.</p>
-          </div>
-          <button id="refresh-btn" class="btn-primary">
-            <i class="fas fa-sync-alt"></i> Scan Sekarang
+        <!-- Tabs Navigasi Antara Modem Belum Dikonfigurasi dan Modem Terdaftar -->
+        <div class="tabs-nav glass">
+          <button type="button" class="tab-btn active" id="tab-unconfigured">
+            <i class="fas fa-search"></i> Modem Belum Terdaftar
+            <span class="tab-badge" id="badge-unconf-count">0</span>
           </button>
-        </section>
+          <button type="button" class="tab-btn" id="tab-registered">
+            <i class="fas fa-check-circle"></i> Modem Terdaftar
+            <span class="tab-badge" id="badge-reg-count">0</span>
+          </button>
+        </div>
 
-        <section class="results">
-          <div id="loading" class="hidden">
-            <div class="loader"></div>
-            <p>Scanning OLT... Mohon tunggu.</p>
-          </div>
+        <!-- Section 1: Tabel Modem Unconfigured -->
+        <div id="section-unconfigured">
+          <section class="controls glass">
+            <div class="info-group">
+              <h2>Unconfigured Modems</h2>
+              <p>Mendeteksi modem ZTE yang belum dikonfigurasi pada OLT via SNMP.</p>
+              <div class="filter-wrapper">
+                <div id="filter-badge" class="filter-tag">
+                  <i class="fas fa-filter"></i>
+                  <span id="filter-text">Memeriksa filter...</span>
+                </div>
+                <div class="filter-mode-toggles">
+                  <button type="button" id="btn-mode-all" class="btn-toggle" title="Scan seluruh Card dan Port">
+                    <i class="fas fa-globe"></i> Scan Semua
+                  </button>
+                  <button type="button" id="btn-mode-env" class="btn-toggle active" title="Gunakan kunci filter dari .env">
+                    <i class="fas fa-lock"></i> Kunci (.env)
+                  </button>
+                </div>
+              </div>
+            </div>
+            <button id="refresh-btn" class="btn-primary">
+              <i class="fas fa-sync-alt"></i> Scan Sekarang
+            </button>
+          </section>
 
-          <div id="error-container" class="hidden glass error-card">
-            <i class="fas fa-exclamation-triangle"></i>
-            <p id="error-msg"></p>
-          </div>
+          <section class="results">
+            <div id="loading" class="hidden">
+              <div class="loader"></div>
+              <p id="loading-text">Scanning OLT... Mohon tunggu.</p>
+            </div>
 
-          <div class="table-container glass">
-            <table id="onu-table">
-              <thead>
-                <tr>
-                  <th>No</th>
-                  <th>Serial Number</th>
-                  <th>ONU ID / Port</th>
-                  <th>Raw Data</th>
-                  <th>Aksi</th>
-                </tr>
-              </thead>
-              <tbody id="onu-list">
-                <!-- Data akan dimunculkan di sini -->
-                <tr>
-                  <td colspan="5" class="empty-msg">
-                    Klik "Scan Sekarang" untuk memulai pencarian.
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
+            <div id="error-container" class="hidden glass error-card">
+              <i class="fas fa-exclamation-triangle"></i>
+              <p id="error-msg"></p>
+            </div>
+
+            <div class="table-toolbar">
+              <div class="search-box">
+                <i class="fas fa-search search-icon"></i>
+                <input type="text" id="search-unconf" placeholder="Cari Serial Number (SN)..." autocomplete="off" />
+                <button type="button" class="btn-clear-search hidden" id="clear-search-unconf" title="Hapus pencarian">
+                  <i class="fas fa-times"></i>
+                </button>
+              </div>
+              <div class="table-counter" id="unconf-counter">Total: 0 modem</div>
+            </div>
+
+            <div class="table-container glass">
+              <table id="onu-table">
+                <thead>
+                  <tr>
+                    <th>No</th>
+                    <th>Serial Number</th>
+                    <th>Lokasi (Card / Port)</th>
+                    <th>Raw Data</th>
+                    <th>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="onu-list">
+                  <tr>
+                    <td colspan="5" class="empty-msg">
+                      Klik "Scan Sekarang" untuk memulai pencarian.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <!-- Section 2: Tabel Modem Terdaftar -->
+        <div id="section-registered" class="hidden">
+          <section class="controls glass">
+            <div class="info-group">
+              <h2>Modem Terdaftar</h2>
+              <p>Daftar seluruh modem yang telah berhasil didaftarkan dan aktif pada OLT.</p>
+            </div>
+            <button id="refresh-reg-btn" class="btn-primary">
+              <i class="fas fa-sync-alt"></i> Refresh Data
+            </button>
+          </section>
+
+          <section class="results">
+            <div id="reg-table-loading" class="hidden" style="text-align: center; padding: 2rem;">
+              <div class="loader" style="margin: 0 auto 1rem;"></div>
+              <p style="color: #94a3b8;">Memuat data modem terdaftar...</p>
+            </div>
+
+            <div class="table-toolbar">
+              <div class="search-box">
+                <i class="fas fa-search search-icon"></i>
+                <input type="text" id="search-reg" placeholder="Cari Serial Number (SN)..." autocomplete="off" />
+                <button type="button" class="btn-clear-search hidden" id="clear-search-reg" title="Hapus pencarian">
+                  <i class="fas fa-times"></i>
+                </button>
+              </div>
+              <div class="table-counter" id="reg-counter">Total: 0 modem</div>
+            </div>
+
+            <div class="table-container glass">
+              <table id="registered-table">
+                <thead>
+                  <tr>
+                    <th>No</th>
+                    <th>Serial Number</th>
+                    <th>Interface</th>
+                    <th>ONU ID</th>
+                    <th>Tipe Profil</th>
+                    <th>Waktu Registrasi</th>
+                    <th>Aksi</th>
+                  </tr>
+                </thead>
+                <tbody id="registered-list">
+                  <tr>
+                    <td colspan="7" class="empty-msg">
+                      Memuat data modem terdaftar...
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
       </main>
 
       <footer>
-        <p>&copy; 2024 GPON Manager Tool • Built with Node.js</p>
+        <p>&copy; 2024 GPON Manager Tool • ZTE OLT Management</p>
       </footer>
+    </div>
+
+    <!-- Modal Konfirmasi Registrasi ONU via SSH -->
+    <div id="reg-modal" class="modal-overlay hidden">
+      <div class="modal-card glass">
+        <div class="modal-header">
+          <div class="modal-title">
+            <i class="fas fa-shield-alt"></i>
+            <h3>Konfirmasi Registrasi ONU</h3>
+          </div>
+          <button type="button" class="btn-icon" id="btn-close-modal" title="Tutup">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+
+        <form id="reg-form" class="modal-body">
+          <input type="hidden" id="reg-card" />
+          <input type="hidden" id="reg-port" />
+          <input type="hidden" id="reg-sn" />
+
+          <!-- Form Details Konfirmasi -->
+          <div id="modal-confirm-content">
+            <div class="confirm-box">
+              <div class="confirm-icon">
+                <i class="fas fa-network-wired"></i>
+              </div>
+              <div class="confirm-content">
+                <div class="confirm-question">Daftarkan modem ini ke ZTE OLT?</div>
+                <p class="confirm-desc">Sistem akan mendaftarkan modem dan memilih nomor ONU (1 - 128) secara otomatis.</p>
+              </div>
+            </div>
+
+            <div class="details-card">
+              <div class="detail-item">
+                <span class="detail-label"><i class="fas fa-fingerprint"></i> Serial Number</span>
+                <span class="detail-value highlight" id="confirm-sn">-</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label"><i class="fas fa-ethernet"></i> Lokasi Interface</span>
+                <span class="detail-value" id="confirm-interface">-</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label"><i class="fas fa-hashtag"></i> Nomor ONU ID</span>
+                <span class="badge-mini" style="background: rgba(99, 102, 241, 0.2); color: #818cf8; border-color: rgba(99, 102, 241, 0.4);">
+                  <i class="fas fa-magic"></i> Otomatis (Maks 128)
+                </span>
+                <input type="hidden" id="reg-onu-id" value="" />
+              </div>
+              <div class="detail-item">
+                <span class="detail-label"><i class="fas fa-microchip"></i> Profil Tipe ONU</span>
+                <span class="detail-value" id="confirm-onu-type">ZTEG-F609</span>
+                <input type="hidden" id="reg-onu-type" value="ZTEG-F609" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Loading State (Muncul saat proses kirim) -->
+          <div id="reg-loading" class="modal-loading-box hidden">
+            <div class="loader"></div>
+            <h4>Sedang Mendaftarkan ke OLT...</h4>
+            <p>Sistem sedang mendaftarkan modem ke OLT. Mohon tunggu sejenak.</p>
+          </div>
+
+          <!-- Result State (Sukses / Gagal) - Bersih tanpa script raw -->
+          <div id="reg-result" class="hidden result-box">
+            <div class="result-header">
+              <i id="reg-result-icon" class="fas fa-check-circle"></i>
+              <h4 id="reg-result-title">Registrasi Berhasil!</h4>
+            </div>
+            <p id="reg-result-desc" class="result-desc"></p>
+          </div>
+
+          <div class="modal-footer" id="modal-footer">
+            <button type="button" class="btn-secondary" id="btn-cancel-modal">Batal</button>
+            <button type="submit" class="btn-primary" id="btn-submit-reg">
+              <i class="fas fa-check"></i> Ya, Daftarkan ke OLT
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal Konfirmasi Hapus ONU via SSH -->
+    <div id="delete-modal" class="modal-overlay hidden">
+      <div class="modal-card glass">
+        <div class="modal-header">
+          <div class="modal-title">
+            <i class="fas fa-trash-alt" style="color: #ef4444;"></i>
+            <h3>Konfirmasi Hapus ONU dari OLT</h3>
+          </div>
+          <button type="button" class="btn-icon" id="btn-close-delete-modal" title="Tutup">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+
+        <form id="delete-form" class="modal-body">
+          <input type="hidden" id="del-id" />
+          <input type="hidden" id="del-card" />
+          <input type="hidden" id="del-port" />
+          <input type="hidden" id="del-onuid" />
+
+          <div id="modal-delete-content">
+            <div class="confirm-box" style="background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3);">
+              <div class="confirm-icon" style="color: #ef4444;">
+                <i class="fas fa-exclamation-triangle"></i>
+              </div>
+              <div class="confirm-content">
+                <div class="confirm-question">Hapus modem ini dari ZTE OLT?</div>
+                <p class="confirm-desc">Modem ini akan dihapus dari konfigurasi OLT dan dikeluarkan dari daftar modem terdaftar.</p>
+              </div>
+            </div>
+
+            <div class="details-card">
+              <div class="detail-item">
+                <span class="detail-label"><i class="fas fa-fingerprint"></i> Serial Number</span>
+                <span class="detail-value highlight" id="del-confirm-sn">-</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label"><i class="fas fa-ethernet"></i> Lokasi Interface</span>
+                <span class="detail-value" id="del-confirm-interface">-</span>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label"><i class="fas fa-hashtag"></i> Nomor ONU ID</span>
+                <span class="detail-value highlight" style="color: #ef4444;" id="del-confirm-onuid">-</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Loading State Hapus -->
+          <div id="delete-loading" class="modal-loading-box hidden">
+            <div class="loader"></div>
+            <h4>Sedang Menghapus Modem dari OLT...</h4>
+            <p>Sistem sedang memproses penghapusan modem dari OLT. Mohon tunggu...</p>
+          </div>
+
+          <!-- Result State Hapus -->
+          <div id="delete-result" class="hidden result-box">
+            <div class="result-header">
+              <i id="del-result-icon" class="fas fa-check-circle"></i>
+              <h4 id="del-result-title">Modem Berhasil Dihapus!</h4>
+            </div>
+            <p id="del-result-desc" class="result-desc"></p>
+          </div>
+
+          <div class="modal-footer" id="del-modal-footer">
+            <button type="button" class="btn-secondary" id="btn-cancel-delete">Batal</button>
+            <button type="submit" class="btn-danger" id="btn-submit-delete">
+              <i class="fas fa-trash-alt"></i> Ya, Hapus Modem dari OLT
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Modal Status Sinyal Laser ONU via SNMP -->
+    <div id="laser-modal" class="modal-overlay hidden">
+      <div class="modal-card glass">
+        <div class="modal-header">
+          <div class="modal-title">
+            <i class="fas fa-satellite-dish" style="color: #38bdf8;"></i>
+            <h3>Cek Sinyal Laser Optik ONU</h3>
+          </div>
+          <button type="button" class="btn-icon" id="btn-close-laser-modal" title="Tutup">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>
+
+        <div class="modal-body">
+          <input type="hidden" id="laser-query-card" />
+          <input type="hidden" id="laser-query-port" />
+          <input type="hidden" id="laser-query-onuid" />
+
+          <div class="details-card">
+            <div class="detail-item">
+              <span class="detail-label"><i class="fas fa-fingerprint"></i> Serial Number</span>
+              <span class="detail-value highlight" id="laser-modal-sn">-</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label"><i class="fas fa-ethernet"></i> Lokasi Interface</span>
+              <span class="detail-value" id="laser-modal-interface">-</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label"><i class="fas fa-signal"></i> Status Koneksi ONU</span>
+              <span class="badge-mini" id="laser-modal-status">Memeriksa...</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label"><i class="fas fa-network-wired"></i> IP Address ONU</span>
+              <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+                <div class="detail-value-group">
+                  <span class="detail-value highlight" id="laser-modal-ip" style="font-size: 0.95rem; color: #38bdf8;">-</span>
+                  <button type="button" class="btn-copy hidden" id="btn-copy-laser-ip" title="Salin IP Address" style="padding: 3px 8px; font-size: 0.75rem;">
+                    <i class="fas fa-copy"></i>
+                  </button>
+                </div>
+                <div id="laser-modal-extra-ips" class="hidden" style="display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end;"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Loading Indicator -->
+          <div id="laser-modal-loading" class="modal-loading-box">
+            <div class="loader"></div>
+            <p>Membaca parameter optik dari OLT via SNMP...</p>
+          </div>
+
+          <!-- Laser Metrics Display -->
+          <div id="laser-metrics-display" class="hidden">
+            <div class="laser-metric-box">
+              <span style="font-size: 0.85rem; color: #94a3b8; font-weight: 500;">
+                <i class="fas fa-arrow-down" style="color: #38bdf8;"></i> Rx Optical Power (Redaman Sinyal Masuk)
+              </span>
+              <div class="laser-val" id="laser-rx-val">- dBm</div>
+              <div class="badge-mini" id="laser-rx-badge">Memuat...</div>
+              <div class="signal-bar-track">
+                <div class="signal-bar-fill" id="laser-signal-bar"></div>
+              </div>
+              <small class="laser-hint">Standar ideal GPON: -14 dBm s/d -24 dBm (Batas kritis &lt; -27 dBm)</small>
+            </div>
+
+            <div class="laser-tx-box" style="margin-top: 10px;">
+              <span><i class="fas fa-arrow-up" style="color: #10b981;"></i> Tx Optical Power (Daya Pancar ONU)</span>
+              <strong id="laser-tx-val" style="color: #fff; font-family: monospace;">- dBm</strong>
+            </div>
+          </div>
+
+          <div class="modal-footer" style="margin-top: 0.5rem;">
+            <button type="button" class="btn-primary" id="btn-refresh-laser">
+              <i class="fas fa-sync-alt"></i> Refresh Sinyal
+            </button>
+            <button type="button" class="btn-secondary" id="btn-done-laser">Tutup</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden">
+      <i class="fas fa-check-circle"></i>
+      <span id="toast-msg">Serial number disalin!</span>
     </div>
 
     <script src="app.js"></script>

@@ -309,7 +309,7 @@
           <div id="delete-loading" class="modal-loading-box hidden">
             <div class="loader"></div>
             <h4>Sedang Menghapus Modem dari OLT...</h4>
-            <p>Sistem sedang memproses penghapusan modem dari OLT. Mohon tunggu...</p>
+            <p>Sistem sedang mengirim perintah SSH dan menunggu balasan dari OLT. Mohon tunggu...</p>
           </div>
 
           <!-- Result State Hapus -->
@@ -319,6 +319,12 @@
               <h4 id="del-result-title">Modem Berhasil Dihapus!</h4>
             </div>
             <p id="del-result-desc" class="result-desc"></p>
+            <div id="del-result-log-box" class="terminal-box hidden" style="margin-top: 14px; text-align: left;">
+              <div class="terminal-bar" style="display: flex; justify-content: space-between; align-items: center; font-size: 0.75rem; color: #94a3b8; margin-bottom: 6px;">
+                <span><i class="fas fa-terminal"></i> Respon Terminal OLT:</span>
+              </div>
+              <pre id="del-result-log" style="max-height: 150px; overflow-y: auto; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(255,255,255,0.1); padding: 10px; border-radius: 6px; font-family: monospace; font-size: 0.75rem; color: #38bdf8; white-space: pre-wrap; word-break: break-all; margin: 0;"></pre>
+            </div>
           </div>
 
           <div class="modal-footer" id="del-modal-footer">

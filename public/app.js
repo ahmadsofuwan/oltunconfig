@@ -75,6 +75,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const deleteResult = document.getElementById('delete-result');
     const delResultTitle = document.getElementById('del-result-title');
     const delResultDesc = document.getElementById('del-result-desc');
+    const delResultLogBox = document.getElementById('del-result-log-box');
+    const delResultLog = document.getElementById('del-result-log');
     const delModalFooter = document.getElementById('del-modal-footer');
     const btnCloseDeleteModal = document.getElementById('btn-close-delete-modal');
     const btnCancelDelete = document.getElementById('btn-cancel-delete');
@@ -478,6 +480,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (delModalFooter) delModalFooter.classList.remove('hidden');
         if (deleteLoading) deleteLoading.classList.add('hidden');
         if (deleteResult) deleteResult.classList.add('hidden');
+        if (delResultLogBox) delResultLogBox.classList.add('hidden');
+        if (delResultLog) delResultLog.innerText = '';
 
         if (btnSubmitDelete) {
             btnSubmitDelete.disabled = false;
@@ -532,21 +536,39 @@ document.addEventListener('DOMContentLoaded', () => {
                     deleteResult.className = 'result-box success';
                     delResultTitle.innerText = 'Modem Berhasil Dihapus!';
                     delResultDesc.innerHTML = `Modem <strong>ONU #${onuId}</strong> berhasil dihapus dari interface <strong>${result.interface || ('gpon-olt_1/' + card + '/' + port)}</strong>.`;
-                    deleteResult.classList.remove('hidden');
 
+                    if (delResultLog && delResultLogBox) {
+                        if (result.output) {
+                            delResultLog.innerText = result.output;
+                            delResultLogBox.classList.remove('hidden');
+                        } else {
+                            delResultLogBox.classList.add('hidden');
+                        }
+                    }
+
+                    deleteResult.classList.remove('hidden');
                     showToast(`ONU #${onuId} berhasil dihapus dari OLT!`);
 
                     setTimeout(() => {
                         closeDeleteModal();
                         fetchRegistered();
                         fetchUnconfigured();
-                    }, 1800);
+                    }, 2400);
                 } else {
                     deleteResult.className = 'result-box error';
                     delResultTitle.innerText = 'Gagal Menghapus Modem';
-                    delResultDesc.innerText = result.error || 'Terjadi kesalahan saat menghapus modem dari OLT.';
-                    deleteResult.classList.remove('hidden');
+                    delResultDesc.innerHTML = `<span style="font-weight: 600;">${result.error || 'Terjadi kesalahan saat menghapus modem dari OLT.'}</span>${result.details && result.details !== result.error ? `<br><span style="font-size: 0.85rem; opacity: 0.9; margin-top: 5px; display: inline-block;">${result.details}</span>` : ''}`;
 
+                    if (delResultLog && delResultLogBox) {
+                        if (result.output || result.details) {
+                            delResultLog.innerText = result.output || result.details;
+                            delResultLogBox.classList.remove('hidden');
+                        } else {
+                            delResultLogBox.classList.add('hidden');
+                        }
+                    }
+
+                    deleteResult.classList.remove('hidden');
                     if (modalDeleteContent) modalDeleteContent.classList.remove('hidden');
                     if (delModalFooter) delModalFooter.classList.remove('hidden');
                 }
@@ -554,7 +576,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (deleteLoading) deleteLoading.classList.add('hidden');
                 deleteResult.className = 'result-box error';
                 delResultTitle.innerText = 'Kesalahan Jaringan';
-                delResultDesc.innerText = err.message;
+                delResultDesc.innerText = err.message || 'Tidak dapat menghubungi server lokal.';
                 deleteResult.classList.remove('hidden');
 
                 if (modalDeleteContent) modalDeleteContent.classList.remove('hidden');

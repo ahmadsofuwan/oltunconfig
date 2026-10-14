@@ -332,6 +332,47 @@ function registerOnu(params) {
  * @param {number|string} params.onuId
  * @returns {Promise<object>}
  */
+/**
+ * Helper untuk menghapus kode ANSI escape dari output terminal
+ */
+function cleanTerminalOutput(raw) {
+  if (!raw) return "";
+  return raw
+    .replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, "")
+    .replace(/\r\r+/g, "\r")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+}
+
+/**
+ * Hapus (Unregister) ONU dari ZTE OLT via SSH dengan MENUNGGU RESPON LENGKAP DARI OLT
+ *
+ * Mengirimkan perintah konfigurasi ZTE CLI secara bertahap:
+ * 1. config t
+ * 2. interface gpon-olt_1/<card>/<port>
+ * 3. no onu <onuId>
+ *    (Otomatis mendeteksi dan menjawab konfirmasi 'y' jika OLT meminta konfirmasi [y/n])
+ * 4. exit
+ * 5. exit
+ * 6. exit
+ *
+ * Menunggu respon output terminal OLT sampai sesi selesai, memeriksa pesan error CLI ZTE,
+ * dan hanya mengembalikan status berhasil jika perintah benar-benar diterima OLT.
+ *
+ * @param {object} params
+ * @param {string} params.host
+ * @param {number} [params.port=22]
+ * @param {string} params.username
+ * @param {string} params.password
+ * @param {number|string} params.slot
+ * @param {number|string} params.ponPort
+ * @param {number|string} params.onuId
+ * @param {number} [params.timeoutMs=20000]
+ * @returns {Promise<object>}
+ */
 function deleteOnu(params) {
   return new Promise((resolve, reject) => {
     const {
@@ -342,6 +383,7 @@ function deleteOnu(params) {
       slot,
       ponPort,
       onuId,
+      timeoutMs = 20000,
     } = params;
 
     if (!host || !username || !password) {
@@ -370,8 +412,6 @@ function deleteOnu(params) {
       "exit",
     ];
 
-    const scriptPayload = `\r\nconfig t\r\ninterface gpon-olt_1/${slot}/${ponPort}\r\nno onu ${numOnuId}\r\nexit\r\nexit\r\nexit\r\ny\r\n`;
-
     const sshAlgorithms = {
       kex: [
         "diffie-hellman-group1-sha1",
@@ -393,73 +433,195 @@ function deleteOnu(params) {
       hmac: ["hmac-sha1", "hmac-sha1-96", "hmac-md5"],
     };
 
-    // Segera kembalikan respons sukses ke UI
-    resolve({
-      success: true,
-      message: `Perintah hapus ONU #${onuId} berhasil dikirim ke OLT (Interface: gpon-olt_1/${slot}/${ponPort})`,
-      interface: `gpon-olt_1/${slot}/${ponPort}`,
-      onuId,
-      commandsExecuted,
-    });
-
-    // Eksekusi SSH di background
     console.log(
-      `[SSH-DELETE] Menghapus ONU #${onuId} pada interface gpon-olt_1/${slot}/${ponPort} di OLT ${host}...`
+      `[SSH-DELETE] Memulai koneksi SSH ke ${host}:${port} untuk menghapus ONU #${numOnuId} di gpon-olt_1/${slot}/${ponPort}...`
     );
 
     const conn = new Client();
-    let hasEnded = false;
+    let isSettled = false;
+    let rawOutput = "";
+    let overallTimeoutTimer = null;
+    let idleTimer = null;
 
-    const safeEnd = () => {
-      if (!hasEnded) {
-        hasEnded = true;
-        try {
-          conn.end();
-          conn.destroy();
-        } catch (e) {}
+    const cleanup = () => {
+      if (overallTimeoutTimer) {
+        clearTimeout(overallTimeoutTimer);
+        overallTimeoutTimer = null;
       }
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+      try {
+        conn.end();
+        conn.destroy();
+      } catch (e) {}
     };
+
+    const finishSuccess = () => {
+      if (isSettled) return;
+      isSettled = true;
+      cleanup();
+
+      const cleanedOutput = cleanTerminalOutput(rawOutput);
+      console.log(
+        `[SSH-DELETE SUCCESS] Sesi SSH selesai. Output terminal diterima (${cleanedOutput.length} karakter).`
+      );
+
+      // Cek apakah ada error ZTE CLI spesifik
+      // Pola error ZTE OLT: %Error, % Invalid, % Incomplete, % Ambiguous
+      const errorMatch = cleanedOutput.match(
+        /(%(?:Error|error)[^\n\r]*|%(?:Invalid|invalid|Incomplete|Ambiguous)[^\n\r]*)/i
+      );
+
+      // Cek jika errornya adalah bahwa ONU memang sudah tidak ada di OLT
+      const isAlreadyRemoved = /(does not exist|not exist|not configured|entry not exist)/i.test(
+        cleanedOutput
+      );
+
+      if (errorMatch && !isAlreadyRemoved) {
+        const errorDetail = errorMatch[0].trim();
+        console.warn(`[SSH-DELETE WARN] OLT mengembalikan error: ${errorDetail}`);
+        return reject(
+          new Error(`OLT menolak perintah hapus: ${errorDetail}`)
+        );
+      }
+
+      const message = isAlreadyRemoved
+        ? `ONU #${numOnuId} sudah tidak ada di OLT (telah dibersihkan)`
+        : `ONU #${numOnuId} pada interface gpon-olt_1/${slot}/${ponPort} berhasil dihapus dari OLT`;
+
+      resolve({
+        success: true,
+        message,
+        interface: `gpon-olt_1/${slot}/${ponPort}`,
+        onuId: numOnuId,
+        commandsExecuted,
+        output: cleanedOutput,
+        alreadyRemoved: isAlreadyRemoved,
+      });
+    };
+
+    const finishError = (err) => {
+      if (isSettled) return;
+      isSettled = true;
+      cleanup();
+      console.error(`[SSH-DELETE FAILED] ${err.message}`);
+      reject(err);
+    };
+
+    // Timeout pengaman utama (default 20s)
+    overallTimeoutTimer = setTimeout(() => {
+      finishError(
+        new Error(
+          `Timeout menunggu respon SSH dari OLT (${timeoutMs / 1000} detik). Periksa konektivitas jaringan atau beban OLT.`
+        )
+      );
+    }, timeoutMs);
 
     conn
       .on("ready", () => {
         conn.shell({ term: "vt100", cols: 120, rows: 40 }, (err, stream) => {
           if (err) {
-            console.error("[SSH-DELETE ERROR] Gagal membuka shell:", err.message);
-            safeEnd();
-            return;
+            return finishError(
+              new Error(`Gagal membuka shell SSH pada OLT: ${err.message}`)
+            );
           }
 
+          let allCommandsSent = false;
+          let answeredConfirmation = false;
+
           stream.on("close", () => {
-            safeEnd();
+            console.log("[SSH-DELETE] Stream shell OLT ditutup.");
+            finishSuccess();
           });
 
-          stream.write(scriptPayload);
+          stream.on("data", (chunk) => {
+            const text = chunk.toString("utf8");
+            rawOutput += text;
 
-          setTimeout(() => {
-            try {
-              stream.end();
-            } catch (e) {}
-            safeEnd();
-            console.log(
-              `[SSH-DELETE] ONU #${onuId} pada gpon-olt_1/${slot}/${ponPort} BERHASIL dihapus & session SSH resmi ditutup.`
-            );
-          }, 1000);
+            // Deteksi otomatis jika OLT meminta konfirmasi (y/n)
+            if (
+              !answeredConfirmation &&
+              /(y\/n)\[n\]:|\(y\/n\)\s*:?|continue\?\s*\(y\/n\)/i.test(text)
+            ) {
+              answeredConfirmation = true;
+              console.log("[SSH-DELETE] Mendeteksi prompt konfirmasi OLT [y/n], mengirim 'y'...");
+              stream.write("y\r\n");
+            }
+
+            // Jika semua perintah sudah dikirim, tunggu jeda hening (idle) 1.2 detik
+            if (allCommandsSent) {
+              if (idleTimer) clearTimeout(idleTimer);
+              idleTimer = setTimeout(() => {
+                try {
+                  stream.end();
+                } catch (e) {}
+                finishSuccess();
+              }, 1200);
+            }
+          });
+
+          stream.on("error", (streamErr) => {
+            console.error("[SSH-DELETE STREAM ERROR]", streamErr.message);
+          });
+
+          // Kirim perintah secara berurutan dengan jeda aman antar baris
+          const stepList = [
+            "config t",
+            `interface gpon-olt_1/${slot}/${ponPort}`,
+            `no onu ${numOnuId}`,
+            "exit",
+            "exit",
+            "exit",
+          ];
+
+          let stepIndex = 0;
+          const sendNextStep = () => {
+            if (isSettled) return;
+
+            if (stepIndex < stepList.length) {
+              const cmd = stepList[stepIndex++];
+              stream.write(`${cmd}\r\n`);
+
+              // Beri jeda 350ms antar perintah agar OLT memproses buffer dengan stabil
+              // Khusus setelah 'no onu', beri jeda sedikit lebih lama (550ms) untuk antisipasi konfirmasi
+              const delay = cmd.startsWith("no onu") ? 550 : 350;
+              setTimeout(sendNextStep, delay);
+            } else {
+              allCommandsSent = true;
+
+              // Pasang idle timer jika OLT tidak menutup stream secara otomatis
+              if (idleTimer) clearTimeout(idleTimer);
+              idleTimer = setTimeout(() => {
+                try {
+                  stream.end();
+                } catch (e) {}
+                finishSuccess();
+              }, 1500);
+            }
+          };
+
+          // Mulai eksekusi perintah setelah jeda 300ms dari pembukaan shell
+          setTimeout(sendNextStep, 300);
         });
       })
-      .on("error", (err) => {
-        console.error(`[SSH-DELETE ERROR] Koneksi SSH ke OLT gagal: ${err.message}`);
-        safeEnd();
+      .on("error", (connErr) => {
+        finishError(
+          new Error(`Koneksi SSH ke OLT gagal: ${connErr.message}`)
+        );
       })
       .connect({
         host,
         port: parseInt(port, 10) || 22,
         username,
         password,
-        readyTimeout: 30000,
+        readyTimeout: 15000,
         algorithms: sshAlgorithms,
       });
   });
 }
 
-module.exports = { registerOnu, deleteOnu, loadRegisterScript, getTemplatePath };
+module.exports = { registerOnu, deleteOnu, loadRegisterScript, getTemplatePath, cleanTerminalOutput };
+
 

@@ -302,7 +302,9 @@ app.post('/api/delete-onu', async (req, res) => {
             return res.status(400).json({ error: 'Password SSH belum disetel di .env' });
         }
 
-        // 1. Eksekusi perintah hapus di ZTE OLT via SSH (no onu <id>)
+        console.log(`[DELETE-ONU] Memulai proses hapus ONU #${targetOnuId} pada interface gpon-olt_1/${targetCard}/${targetPort} via SSH (Menunggu respon OLT)...`);
+
+        // 1. Eksekusi perintah hapus di ZTE OLT via SSH (no onu <id>) dan TUNGGU respon OLT
         const result = await deleteOnu({
             host,
             port: sshPort,
@@ -313,7 +315,7 @@ app.post('/api/delete-onu', async (req, res) => {
             onuId: targetOnuId
         });
 
-        // 2. Hapus dari database SQLite jika ada ID
+        // 2. Hapus dari database SQLite jika ada ID dan eksekusi OLT berhasil
         if (id) {
             await deleteRegisteredOnu(id);
             console.log(`[DATABASE] Berhasil menghapus record ID #${id} (ONU #${targetOnuId}) dari SQLite.`);
@@ -327,8 +329,11 @@ app.post('/api/delete-onu', async (req, res) => {
             interface: `gpon-olt_1/${targetCard}/${targetPort}`
         });
     } catch (error) {
-        console.error('Delete ONU via SSH Error:', error);
-        res.status(500).json({ error: error.message || 'Gagal menghapus ONU dari OLT' });
+        console.error('Delete ONU via SSH Error:', error.message);
+        res.status(500).json({ 
+            error: error.message || 'Gagal menghapus ONU dari OLT',
+            details: error.output || error.message 
+        });
     }
 });
 

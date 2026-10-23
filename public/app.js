@@ -401,7 +401,64 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /**
-     * Submit konfirmasi registrasi ke OLT via SSH
+     * Helper untuk melakukan polling status task di server
+     */
+    function pollTaskStatus(taskId, options = {}) {
+        const {
+            interval = 1000,
+            timeout = 75000,
+            onProgress = () => {},
+            onComplete = () => {},
+            onError = () => {}
+        } = options;
+
+        const startTime = Date.now();
+        let isFinished = false;
+
+        const check = async () => {
+            if (isFinished) return;
+
+            if (Date.now() - startTime > timeout) {
+                isFinished = true;
+                onError(new Error('Waktu polling task habis (timeout).'));
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/tasks/${taskId}`);
+                if (!res.ok) {
+                    if (res.status === 404) {
+                        isFinished = true;
+                        onError(new Error('Task tidak ditemukan di server.'));
+                        return;
+                    }
+                }
+
+                const task = await res.json();
+
+                if (task.status === 'completed') {
+                    isFinished = true;
+                    onComplete(task);
+                } else if (task.status === 'failed') {
+                    isFinished = true;
+                    onError(task);
+                } else {
+                    // Masih pending atau running
+                    onProgress(task);
+                    setTimeout(check, interval);
+                }
+            } catch (err) {
+                console.warn('[POLL WARN] Gagal menghubungi server saat polling:', err.message);
+                setTimeout(check, interval + 500);
+            }
+        };
+
+        // Mulai polling pertama setelah jeda singkat
+        setTimeout(check, 350);
+    }
+
+    /**
+     * Submit konfirmasi registrasi ke OLT via SSH (Mode Background + Polling)
      */
     if (regForm) {
         regForm.addEventListener('submit', async (e) => {
@@ -415,7 +472,11 @@ document.addEventListener('DOMContentLoaded', () => {
             if (modalConfirmContent) modalConfirmContent.classList.add('hidden');
             if (modalFooter) modalFooter.classList.add('hidden');
             if (regResult) regResult.classList.add('hidden');
-            if (regLoading) regLoading.classList.remove('hidden');
+            if (regLoading) {
+                regLoading.classList.remove('hidden');
+                const loadingP = regLoading.querySelector('p');
+                if (loadingP) loadingP.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menghubungi server untuk memulai registrasi...';
+            }
 
             try {
                 const res = await fetch('/api/register-onu', {
@@ -424,32 +485,72 @@ document.addEventListener('DOMContentLoaded', () => {
                     body: JSON.stringify({ card, port, sn, onuType })
                 });
 
-                const result = await res.json();
+                const dispatchResult = await res.json();
 
-                if (regLoading) regLoading.classList.add('hidden');
-
-                if (res.ok && result.success) {
-                    regResult.className = 'result-box success';
-                    regResultTitle.innerText = 'Registrasi Berhasil Diproses!';
-                    const assignedId = result.onuId || 'Auto';
-                    regResultDesc.innerHTML = `Modem <strong>${sn}</strong> berhasil didaftarkan sebagai <strong>ONU #${assignedId}</strong> pada interface <strong>${result.interface || ('gpon-olt_1/' + card + '/' + port)}</strong>.`;
+                if (!res.ok || !dispatchResult.success) {
+                    if (regLoading) regLoading.classList.add('hidden');
+                    regResult.className = 'result-box error';
+                    regResultTitle.innerText = dispatchResult.error || 'Gagal Mendaftarkan ke OLT';
+                    regResultDesc.innerHTML = `<span style="font-weight: 600;">${dispatchResult.error || 'Terjadi kesalahan saat registrasi.'}</span>${dispatchResult.details ? `<br><span style="font-size: 0.85rem; opacity: 0.9; margin-top: 5px; display: inline-block;">${dispatchResult.details}</span>` : ''}`;
                     regResult.classList.remove('hidden');
 
-                    showToast(`ONU #${assignedId} (${sn}) berhasil didaftarkan!`);
+                    if (modalConfirmContent) modalConfirmContent.classList.remove('hidden');
+                    if (modalFooter) modalFooter.classList.remove('hidden');
+                    return;
+                }
 
+                // Jalankan polling jika ada taskId
+                if (dispatchResult.taskId) {
+                    const loadingP = regLoading.querySelector('p');
+                    pollTaskStatus(dispatchResult.taskId, {
+                        interval: 1000,
+                        timeout: 75000,
+                        onProgress: (task) => {
+                            if (loadingP && task.message) {
+                                loadingP.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${task.message}`;
+                            }
+                        },
+                        onComplete: (task) => {
+                            if (regLoading) regLoading.classList.add('hidden');
+                            regResult.className = 'result-box success';
+                            regResultTitle.innerText = 'Registrasi Berhasil Diproses!';
+                            const resObj = task.result || {};
+                            const assignedId = resObj.onuId || dispatchResult.onuId || 'Auto';
+                            regResultDesc.innerHTML = `Modem <strong>${sn}</strong> berhasil didaftarkan sebagai <strong>ONU #${assignedId}</strong> pada interface <strong>${resObj.interface || dispatchResult.interface || ('gpon-olt_1/' + card + '/' + port)}</strong>.`;
+                            regResult.classList.remove('hidden');
+
+                            showToast(`ONU #${assignedId} (${sn}) berhasil didaftarkan!`);
+
+                            setTimeout(() => {
+                                closeModal();
+                                fetchUnconfigured();
+                                fetchRegistered();
+                            }, 2200);
+                        },
+                        onError: (errTask) => {
+                            if (regLoading) regLoading.classList.add('hidden');
+                            regResult.className = 'result-box error';
+                            const errMsg = (errTask && (errTask.error || errTask.message)) || 'Terjadi kesalahan saat registrasi ke OLT.';
+                            regResultTitle.innerText = 'Registrasi Gagal';
+                            regResultDesc.innerHTML = `<span style="font-weight: 600;">${errMsg}</span>`;
+                            regResult.classList.remove('hidden');
+
+                            if (modalConfirmContent) modalConfirmContent.classList.remove('hidden');
+                            if (modalFooter) modalFooter.classList.remove('hidden');
+                        }
+                    });
+                } else {
+                    // Fallback jika respon sinkron
+                    if (regLoading) regLoading.classList.add('hidden');
+                    regResult.className = 'result-box success';
+                    regResultTitle.innerText = 'Registrasi Berhasil Diproses!';
+                    regResult.classList.remove('hidden');
+                    showToast(`ONU berhasil didaftarkan!`);
                     setTimeout(() => {
                         closeModal();
                         fetchUnconfigured();
                         fetchRegistered();
                     }, 1800);
-                } else {
-                    regResult.className = 'result-box error';
-                    regResultTitle.innerText = result.error || 'Gagal Mendaftarkan ke OLT';
-                    regResultDesc.innerHTML = `<span style="font-weight: 600;">${result.error || 'Terjadi kesalahan saat registrasi.'}</span>${result.details ? `<br><span style="font-size: 0.85rem; opacity: 0.9; margin-top: 5px; display: inline-block;">${result.details}</span>` : ''}`;
-                    regResult.classList.remove('hidden');
-
-                    if (modalConfirmContent) modalConfirmContent.classList.remove('hidden');
-                    if (modalFooter) modalFooter.classList.remove('hidden');
                 }
             } catch (err) {
                 if (regLoading) regLoading.classList.add('hidden');
@@ -505,7 +606,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     /**
-     * Submit konfirmasi hapus ONU ke OLT via SSH
+     * Submit konfirmasi hapus ONU ke OLT via SSH (Mode Background + Polling)
      */
     if (deleteForm) {
         deleteForm.addEventListener('submit', async (e) => {
@@ -519,7 +620,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (modalDeleteContent) modalDeleteContent.classList.add('hidden');
             if (delModalFooter) delModalFooter.classList.add('hidden');
             if (deleteResult) deleteResult.classList.add('hidden');
-            if (deleteLoading) deleteLoading.classList.remove('hidden');
+            if (delResultLogBox) delResultLogBox.classList.add('hidden');
+            if (delResultLog) delResultLog.innerText = '';
+            if (deleteLoading) {
+                deleteLoading.classList.remove('hidden');
+                const loadingP = deleteLoading.querySelector('p');
+                if (loadingP) loadingP.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Menghubungi server untuk memulai proses hapus...';
+            }
 
             try {
                 const res = await fetch('/api/delete-onu', {
@@ -528,49 +635,90 @@ document.addEventListener('DOMContentLoaded', () => {
                     body: JSON.stringify({ id, card, port, onuId })
                 });
 
-                const result = await res.json();
+                const dispatchResult = await res.json();
 
-                if (deleteLoading) deleteLoading.classList.add('hidden');
+                if (!res.ok || !dispatchResult.success) {
+                    if (deleteLoading) deleteLoading.classList.add('hidden');
+                    deleteResult.className = 'result-box error';
+                    delResultTitle.innerText = dispatchResult.error || 'Gagal Menghapus Modem';
+                    delResultDesc.innerHTML = `<span style="font-weight: 600;">${dispatchResult.error || 'Terjadi kesalahan saat memulai proses.'}</span>`;
+                    deleteResult.classList.remove('hidden');
+                    if (modalDeleteContent) modalDeleteContent.classList.remove('hidden');
+                    if (delModalFooter) delModalFooter.classList.remove('hidden');
+                    return;
+                }
 
-                if (res.ok && result.success) {
+                // Polling status background task
+                if (dispatchResult.taskId) {
+                    const loadingP = deleteLoading.querySelector('p');
+                    pollTaskStatus(dispatchResult.taskId, {
+                        interval: 1000,
+                        timeout: 45000,
+                        onProgress: (task) => {
+                            if (loadingP && task.message) {
+                                loadingP.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${task.message}`;
+                            }
+                        },
+                        onComplete: (task) => {
+                            if (deleteLoading) deleteLoading.classList.add('hidden');
+                            deleteResult.className = 'result-box success';
+                            delResultTitle.innerText = 'Modem Berhasil Dihapus!';
+                            const resObj = task.result || {};
+                            delResultDesc.innerHTML = `Modem <strong>ONU #${onuId}</strong> berhasil dihapus dari interface <strong>${resObj.interface || ('gpon-olt_1/' + card + '/' + port)}</strong>.`;
+
+                            if (delResultLog && delResultLogBox) {
+                                const out = task.output || (resObj && resObj.output) || '';
+                                if (out) {
+                                    delResultLog.innerText = out;
+                                    delResultLogBox.classList.remove('hidden');
+                                } else {
+                                    delResultLogBox.classList.add('hidden');
+                                }
+                            }
+
+                            deleteResult.classList.remove('hidden');
+                            showToast(`ONU #${onuId} berhasil dihapus dari OLT!`);
+
+                            setTimeout(() => {
+                                closeDeleteModal();
+                                fetchRegistered();
+                                fetchUnconfigured();
+                            }, 2400);
+                        },
+                        onError: (errTask) => {
+                            if (deleteLoading) deleteLoading.classList.add('hidden');
+                            deleteResult.className = 'result-box error';
+                            delResultTitle.innerText = 'Gagal Menghapus Modem';
+                            const errMsg = (errTask && (errTask.error || errTask.message)) || 'Terjadi kesalahan saat menghapus modem dari OLT.';
+                            delResultDesc.innerHTML = `<span style="font-weight: 600;">${errMsg}</span>`;
+
+                            if (delResultLog && delResultLogBox) {
+                                const out = (errTask && errTask.output) || '';
+                                if (out) {
+                                    delResultLog.innerText = out;
+                                    delResultLogBox.classList.remove('hidden');
+                                } else {
+                                    delResultLogBox.classList.add('hidden');
+                                }
+                            }
+
+                            deleteResult.classList.remove('hidden');
+                            if (modalDeleteContent) modalDeleteContent.classList.remove('hidden');
+                            if (delModalFooter) delModalFooter.classList.remove('hidden');
+                        }
+                    });
+                } else {
+                    // Fallback jika tidak ada taskId
+                    if (deleteLoading) deleteLoading.classList.add('hidden');
                     deleteResult.className = 'result-box success';
                     delResultTitle.innerText = 'Modem Berhasil Dihapus!';
-                    delResultDesc.innerHTML = `Modem <strong>ONU #${onuId}</strong> berhasil dihapus dari interface <strong>${result.interface || ('gpon-olt_1/' + card + '/' + port)}</strong>.`;
-
-                    if (delResultLog && delResultLogBox) {
-                        if (result.output) {
-                            delResultLog.innerText = result.output;
-                            delResultLogBox.classList.remove('hidden');
-                        } else {
-                            delResultLogBox.classList.add('hidden');
-                        }
-                    }
-
                     deleteResult.classList.remove('hidden');
                     showToast(`ONU #${onuId} berhasil dihapus dari OLT!`);
-
                     setTimeout(() => {
                         closeDeleteModal();
                         fetchRegistered();
                         fetchUnconfigured();
-                    }, 2400);
-                } else {
-                    deleteResult.className = 'result-box error';
-                    delResultTitle.innerText = 'Gagal Menghapus Modem';
-                    delResultDesc.innerHTML = `<span style="font-weight: 600;">${result.error || 'Terjadi kesalahan saat menghapus modem dari OLT.'}</span>${result.details && result.details !== result.error ? `<br><span style="font-size: 0.85rem; opacity: 0.9; margin-top: 5px; display: inline-block;">${result.details}</span>` : ''}`;
-
-                    if (delResultLog && delResultLogBox) {
-                        if (result.output || result.details) {
-                            delResultLog.innerText = result.output || result.details;
-                            delResultLogBox.classList.remove('hidden');
-                        } else {
-                            delResultLogBox.classList.add('hidden');
-                        }
-                    }
-
-                    deleteResult.classList.remove('hidden');
-                    if (modalDeleteContent) modalDeleteContent.classList.remove('hidden');
-                    if (delModalFooter) delModalFooter.classList.remove('hidden');
+                    }, 2000);
                 }
             } catch (err) {
                 if (deleteLoading) deleteLoading.classList.add('hidden');

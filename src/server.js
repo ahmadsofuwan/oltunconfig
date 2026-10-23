@@ -6,6 +6,7 @@ require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const { getUnconfigured, getAvailableOnuId, getOnuLaser } = require('./snmp');
 const { registerOnu, deleteOnu, loadRegisterScript, getTemplatePath } = require('./ssh');
 const { initDb, saveRegisteredOnu, getRegisteredOnus, getRegisteredOnuById, deleteRegisteredOnu } = require('./db');
+const taskManager = require('./taskManager');
 
 const app = express();
 // Gunakan APP_PORT / HTTP_PORT atau PORT (jika PORT > 100, untuk mencegah konflik jika ada user yang menyetel PORT=2 untuk pon port)
@@ -143,7 +144,21 @@ app.get('/api/next-onu-id', async (req, res) => {
     }
 });
 
-// Endpoint untuk registrasi ONU ke OLT via SSH (Semua logika otomatis di backend)
+// Endpoint untuk polling status background task
+app.get('/api/tasks/:taskId', (req, res) => {
+    const task = taskManager.getTask(req.params.taskId);
+    if (!task) {
+        return res.status(404).json({ error: 'Task tidak ditemukan atau sudah kedaluwarsa' });
+    }
+    res.json(task);
+});
+
+// Endpoint untuk mengambil seluruh daftar background task aktif
+app.get('/api/tasks', (req, res) => {
+    res.json(taskManager.listTasks());
+});
+
+// Endpoint untuk registrasi ONU ke OLT via SSH (Mode Background + Menunggu Respon SSH)
 app.post('/api/register-onu', async (req, res) => {
     try {
         const { card, port: ponPort, onuId, onuType, sn } = req.body;
@@ -214,48 +229,103 @@ app.post('/api/register-onu', async (req, res) => {
             });
         }
 
-        const result = await registerOnu({
-            host,
-            port: sshPort,
-            username,
-            password,
-            slot: card,
-            ponPort,
+        // Buat background task
+        const task = taskManager.createTask('register', {
+            card,
+            port: ponPort,
             onuId: targetOnuId,
-            onuType: type,
             sn,
-            vlan: req.body.vlan,
-            pppoeUsername: req.body.username || req.body.pppoeUsername,
-            pppoePassword: req.body.password || req.body.pppoePassword,
+            onuType: type,
+            interface: `gpon-olt_1/${card}/${ponPort}`
         });
 
-        // Simpan setiap registrasi ke database SQLite
-        let dbRecord = null;
-        try {
-            dbRecord = await saveRegisteredOnu({
-                card,
-                port: ponPort,
-                onuId: targetOnuId,
-                sn,
-                onuType: type,
-                interfaceName: `gpon-olt_1/${card}/${ponPort}`
-            });
-            console.log(`[DATABASE] Berhasil mencatat ONU #${targetOnuId} (${sn}) ke SQLite (ID DB: ${dbRecord.id})`);
-        } catch (dbErr) {
-            console.error('[DATABASE ERROR] Gagal menyimpan ke SQLite:', dbErr.message);
-        }
+        // Jalankan eksekusi SSH push script di background (menunggu respon OLT tuntas)
+        (async () => {
+            try {
+                taskManager.updateTask(task.id, {
+                    status: 'running',
+                    progress: 10,
+                    message: `Menghubungkan ke OLT ${host}:${sshPort} via SSH...`
+                });
 
+                const result = await registerOnu({
+                    host,
+                    port: sshPort,
+                    username,
+                    password,
+                    slot: card,
+                    ponPort,
+                    onuId: targetOnuId,
+                    onuType: type,
+                    sn,
+                    vlan: req.body.vlan,
+                    pppoeUsername: req.body.username || req.body.pppoeUsername,
+                    pppoePassword: req.body.password || req.body.pppoePassword,
+                    onProgress: (prog) => {
+                        taskManager.updateTask(task.id, {
+                            progress: prog.percent,
+                            step: prog.step,
+                            totalSteps: prog.totalSteps,
+                            message: prog.message
+                        });
+                    }
+                });
+
+                // Simpan setiap registrasi ke database SQLite setelah OLT sukses
+                let dbRecord = null;
+                try {
+                    dbRecord = await saveRegisteredOnu({
+                        card,
+                        port: ponPort,
+                        onuId: targetOnuId,
+                        sn,
+                        onuType: type,
+                        interfaceName: `gpon-olt_1/${card}/${ponPort}`
+                    });
+                    console.log(`[DATABASE] Berhasil mencatat ONU #${targetOnuId} (${sn}) ke SQLite (ID DB: ${dbRecord.id})`);
+                } catch (dbErr) {
+                    console.error('[DATABASE ERROR] Gagal menyimpan ke SQLite:', dbErr.message);
+                }
+
+                taskManager.updateTask(task.id, {
+                    status: 'completed',
+                    progress: 100,
+                    message: result.message,
+                    output: result.output,
+                    result: {
+                        ...result,
+                        onuId: targetOnuId,
+                        onuType: type,
+                        sn,
+                        interface: `gpon-olt_1/${card}/${ponPort}`,
+                        dbId: dbRecord ? dbRecord.id : null
+                    }
+                });
+            } catch (err) {
+                console.error(`[BG-REGISTER ERROR] Task ${task.id} gagal:`, err.message);
+                taskManager.updateTask(task.id, {
+                    status: 'failed',
+                    message: err.message || 'Gagal registrasi ONU ke OLT',
+                    error: err.message,
+                    output: err.output || ''
+                });
+            }
+        })();
+
+        // Langsung respon balik dengan status pending dan taskId
         res.json({
-            ...result,
+            success: true,
+            status: 'pending',
+            taskId: task.id,
             onuId: targetOnuId,
             onuType: type,
             sn,
             interface: `gpon-olt_1/${card}/${ponPort}`,
-            dbId: dbRecord ? dbRecord.id : null
+            message: `Push script registrasi ONU #${targetOnuId} sedang diproses di background.`
         });
     } catch (error) {
-        console.error('Register ONU via SSH Error:', error);
-        res.status(500).json({ error: error.message || 'Gagal registrasi ONU ke OLT' });
+        console.error('Register ONU dispatch error:', error);
+        res.status(500).json({ error: error.message || 'Gagal memproses registrasi ONU' });
     }
 });
 
@@ -270,7 +340,7 @@ app.get('/api/registered', async (req, res) => {
     }
 });
 
-// Endpoint untuk menghapus (delete) ONU dari ZTE OLT via SSH dan database
+// Endpoint untuk menghapus (delete) ONU dari ZTE OLT via SSH dan database (Mode Background + Polling)
 app.post('/api/delete-onu', async (req, res) => {
     try {
         const { id, card, port: ponPort, onuId } = req.body;
@@ -302,38 +372,91 @@ app.post('/api/delete-onu', async (req, res) => {
             return res.status(400).json({ error: 'Password SSH belum disetel di .env' });
         }
 
-        console.log(`[DELETE-ONU] Memulai proses hapus ONU #${targetOnuId} pada interface gpon-olt_1/${targetCard}/${targetPort} via SSH (Menunggu respon OLT)...`);
-
-        // 1. Eksekusi perintah hapus di ZTE OLT via SSH (no onu <id>) dan TUNGGU respon OLT
-        const result = await deleteOnu({
-            host,
-            port: sshPort,
-            username,
-            password,
-            slot: targetCard,
-            ponPort: targetPort,
-            onuId: targetOnuId
+        // Buat task di taskManager
+        const task = taskManager.createTask('delete', {
+            id,
+            card: targetCard,
+            port: targetPort,
+            onuId: targetOnuId,
+            sn: record ? record.sn : (req.body.sn || null),
+            interface: `gpon-olt_1/${targetCard}/${targetPort}`
         });
 
-        // 2. Hapus dari database SQLite jika ada ID dan eksekusi OLT berhasil
-        if (id) {
-            await deleteRegisteredOnu(id);
-            console.log(`[DATABASE] Berhasil menghapus record ID #${id} (ONU #${targetOnuId}) dari SQLite.`);
-        }
+        // Jalankan eksekusi SSH di background worker
+        (async () => {
+            try {
+                taskManager.updateTask(task.id, {
+                    status: 'running',
+                    progress: 10,
+                    message: `Menghubungkan ke OLT ${host}:${sshPort} via SSH...`
+                });
 
+                const result = await deleteOnu({
+                    host,
+                    port: sshPort,
+                    username,
+                    password,
+                    slot: targetCard,
+                    ponPort: targetPort,
+                    onuId: targetOnuId,
+                    onProgress: (prog) => {
+                        taskManager.updateTask(task.id, {
+                            progress: prog.percent,
+                            step: prog.step,
+                            totalSteps: prog.totalSteps,
+                            message: prog.message
+                        });
+                    }
+                });
+
+                // Hapus dari database SQLite jika ada ID dan eksekusi OLT berhasil
+                if (id) {
+                    try {
+                        await deleteRegisteredOnu(id);
+                        console.log(`[DATABASE] Berhasil menghapus record ID #${id} (ONU #${targetOnuId}) dari SQLite.`);
+                    } catch (dbErr) {
+                        console.error('[DATABASE ERROR] Gagal menghapus record DB:', dbErr.message);
+                    }
+                }
+
+                taskManager.updateTask(task.id, {
+                    status: 'completed',
+                    progress: 100,
+                    message: result.message,
+                    output: result.output,
+                    result: {
+                        ...result,
+                        card: targetCard,
+                        port: targetPort,
+                        onuId: targetOnuId,
+                        interface: `gpon-olt_1/${targetCard}/${targetPort}`
+                    }
+                });
+            } catch (err) {
+                console.error(`[BG-DELETE ERROR] Task ${task.id} gagal:`, err.message);
+                taskManager.updateTask(task.id, {
+                    status: 'failed',
+                    message: err.message || 'Gagal menghapus ONU dari OLT',
+                    error: err.message,
+                    output: err.output || ''
+                });
+            }
+        })();
+
+        // Respon langsung ke client dengan taskId untuk polling
         res.json({
-            ...result,
+            success: true,
+            status: 'pending',
+            taskId: task.id,
+            message: `Proses hapus ONU #${targetOnuId} sedang berjalan di background.`,
             card: targetCard,
             port: targetPort,
             onuId: targetOnuId,
             interface: `gpon-olt_1/${targetCard}/${targetPort}`
         });
     } catch (error) {
-        console.error('Delete ONU via SSH Error:', error.message);
-        res.status(500).json({ 
-            error: error.message || 'Gagal menghapus ONU dari OLT',
-            details: error.output || error.message 
-        });
+        console.error('Delete ONU dispatch error:', error);
+        res.status(500).json({ error: error.message || 'Gagal memproses permintaan hapus ONU' });
     }
 });
 
